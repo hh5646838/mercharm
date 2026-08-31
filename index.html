@@ -1,0 +1,370 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mermaid 图表工坊</title>
+  <link rel="stylesheet" href="vendor/codemirror/codemirror.css">
+  <link rel="stylesheet" href="vendor/codemirror/show-hint.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/card-editor.css">
+</head>
+<body class="ui-dark">
+  <!-- ===== 顶部导航栏 ===== -->
+  <header class="navbar">
+    <!-- 品牌 Logo（最左） -->
+    <div class="navbar-brand">
+      <div class="logo">
+        <span class="logo-icon">🧠</span>
+        <div class="logo-text-group">
+          <span class="logo-text" id="siteTitle">Mermaid 图表工坊</span>
+          <span class="logo-author" id="siteAuthor"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 黄色区域：模板工具（视觉加大） -->
+    <div class="navbar-tools">
+      <button class="nav-btn tool-btn" id="btnTemplates">📁 模板库</button>
+      <button class="nav-btn tool-btn" id="btnSnippets">✂️ 片段</button>
+      <button class="nav-btn tool-btn" id="btnTableToChart">🎢 表格转图</button>
+    </div>
+
+    <!-- 蓝色区域：风格切换下拉 + 叠加修饰勾选项 -->
+    <div class="navbar-center">
+      <span class="style-label">🎨 风格</span>
+      <select id="themeSelect" class="theme-select"></select>
+      <label class="overlay-toggle" title="节点框加圆角（叠加在当前风格之上）">
+        <input type="checkbox" id="chkRounded">
+        <span>圆角</span>
+      </label>
+      <label class="overlay-toggle" title="箭头连线改为虚线（叠加在当前风格之上）">
+        <input type="checkbox" id="chkDashedArrow">
+        <span>虚线箭头</span>
+      </label>
+      <label class="overlay-toggle" title="颜色反相：白变黑、黑变白（叠加在当前风格之上）">
+        <input type="checkbox" id="chkInvert">
+        <span>反相</span>
+      </label>
+    </div>
+
+    <!-- 红色区域：UI主题切换 + 帮助 + 更多工具 + 关注我 + 下载 -->
+    <div class="navbar-right">
+      <button class="nav-btn nav-ui-theme" id="btnUITheme" title="切换纯黑/纯白界面主题">🌙</button>
+      <button class="nav-btn nav-help" id="btnHelp" title="Mermaid 语法大全">❓ 帮助</button>
+      <a class="nav-btn" id="btnMoreTools" href="#" target="_blank" rel="noopener">🧰 更多工具</a>
+      <button class="nav-btn nav-follow" id="btnFollow">
+        <img class="follow-avatar" id="followAvatar" src="" alt="" style="display:none;">
+        <span class="follow-heart">❤️</span> 关注我
+      </button>
+      <button class="nav-btn btn-download" id="btnExport">⬇️ 下载</button>
+    </div>
+  </header>
+
+
+  <!-- ===== 主体双栏（左预览，右代码） ===== -->
+  <main class="main-container">
+    <!-- 左侧：预览画布 -->
+    <div class="preview-pane">
+      <div class="preview-header">
+        <span class="pane-title">实时预览</span>
+        <div class="custom-style-inline">
+          <label class="cs-inline-item" title="文本框填充颜色"><span>框色</span><input type="color" id="customNodeColor" value="#ffffff"></label>
+          <label class="cs-inline-item" title="节点边框颜色"><span>框线</span><input type="color" id="customBorderColor" value="#333333"></label>
+          <label class="cs-inline-item" title="线条颜色"><span>线色</span><input type="color" id="customLineColor" value="#555555"></label>
+          <label class="cs-inline-item" title="线条粗细"><span>线粗</span>
+            <select id="customLineWidth">
+              <option value="1">1</option>
+              <option value="1.4" selected>1.4</option>
+              <option value="2">2</option>
+              <option value="2.5">2.5</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+          <button class="cs-inline-reset" id="btnResetCustomStyle" title="恢复当前样式默认值">↺</button>
+        </div>
+        <label class="preview-bg-toggle" title="仅在预览区填充白色背景，导出时不会包含白色">
+          <input type="checkbox" id="chkPreviewWhite">
+          <span>白底预览</span>
+        </label>
+        <div class="preview-actions">
+          <button class="icon-btn" id="btnZoomOut" title="缩小">➖</button>
+          <span id="zoomLevel">100%</span>
+          <button class="icon-btn" id="btnZoomIn" title="放大">➕</button>
+          <button class="icon-btn" id="btnFit" title="适应窗口">📍</button>
+          <button class="icon-btn" id="btnZoomReset" title="重置">⟲</button>
+        </div>
+      </div>
+      <div class="preview-canvas" id="previewCanvas">
+        <div class="preview-content" id="previewContent">
+          <div class="empty-state">图表将在此处渲染</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧：代码编辑器 -->
+    <div class="editor-pane text-view">
+      <div class="editor-header">
+        <span class="pane-title">代码编辑器</span>
+        <div class="view-toggle">
+          <button class="view-btn" id="btnCardView" title="电池卡片视图">电池块</button>
+          <button class="view-btn active" id="btnTextView" title="原始Mermaid文本视图">文本</button>
+        </div>
+        <div class="editor-actions">
+          <div class="font-size-ctl" title="调整代码字号">
+            <button class="icon-btn" id="btnFontDec" title="减小字号">A−</button>
+            <span class="font-size-val" id="fontSizeVal">13</span>
+            <button class="icon-btn" id="btnFontInc" title="增大字号">A+</button>
+          </div>
+          <div class="card-text-ctl" id="cardTextCtl" style="display:none;">
+            <input type="text" id="cardNodeTextInput" placeholder="点击电池块后在此编辑文本..." />
+          </div>
+          <span class="action-sep"></span>
+          <button class="icon-btn" id="btnFormat" title="格式化代码">✨</button>
+          <button class="icon-btn" id="btnHistory" title="历史记录">🕐</button>
+          <button class="icon-btn" id="btnClear" title="清空">🗑️</button>
+        </div>
+      </div>
+      <div class="editor-wrapper">
+        <div class="card-editor-container" id="cardEditorContainer">
+          <div class="card-component-panel">
+            <div class="layout-direction">
+              <span class="dir-label">方向</span>
+              <button class="dir-btn active" data-dir="TD" title="向下排列">↓</button>
+              <button class="dir-btn" data-dir="LR" title="向右排列">→</button>
+            </div>
+            <div class="component-menu collapsed">
+              <div class="component-menu-header" id="componentMenuHeader">
+                <span class="menu-title">🔱 流程图</span>
+                <span class="menu-arrow">▼</span>
+              </div>
+              <div class="component-list" id="componentList"></div>
+            </div>
+            <div class="component-menu collapsed">
+              <div class="component-menu-header" id="stateMenuHeader">
+                <span class="menu-title">⏰ 状态图</span>
+                <span class="menu-arrow">▼</span>
+              </div>
+              <div class="component-list" id="stateComponentList"></div>
+            </div>
+          </div>
+          <div class="card-canvas" id="cardCanvas">
+            <svg class="card-edges" id="cardEdges"></svg>
+            <div class="card-nodes" id="cardNodes"></div>
+          </div>
+        </div>
+        <textarea id="codeEditor" spellcheck="false" placeholder="在此输入 Mermaid 代码，实时预览..."></textarea>
+      </div>
+      <!-- 代码错误提示条（仅代码有语法错误时显示，代码修正后自动消失） -->
+      <div class="editor-error" id="editorError" style="display:none;"></div>
+    </div>
+  </main>
+
+  <!-- ===== 底部温馨提示 ===== -->
+  <footer class="footer">
+    <span>🔒 图表全部浏览器本地渲染，代码不会上传服务器 &nbsp;|&nbsp; SVG 适合 Word 论文，高倍率 PNG 适合 PPT 幻灯片 &nbsp;|&nbsp; Powered by <a href="https://mermaid.js.org/" target="_blank" rel="noopener">Mermaid</a> (MIT License)</span>
+  </footer>
+
+  <!-- ===== 模板库模态框 ===== -->
+  <div class="modal" id="templatesModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>📁 学术模板</h3>
+        <button class="close-btn" id="closeTemplates">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="all">全部模板</button>
+          <button class="tab-btn" data-tab="favorites">⭐ 我的收藏</button>
+        </div>
+        <div class="template-grid" id="templateGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 语法片段抽屉 ===== -->
+  <div class="drawer" id="snippetsDrawer">
+    <div class="drawer-header">
+      <h3>✂️ 专业片段</h3>
+      <button class="close-btn" id="closeSnippets">×</button>
+    </div>
+    <div class="drawer-body" id="snippetsList"></div>
+  </div>
+
+  <!-- ===== 表格转图模态框 ===== -->
+  <div class="modal" id="tableModal">
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h3>📋 表格数据转图表</h3>
+        <button class="close-btn" id="closeTable">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint">粘贴表格数据（每行：标签 + Tab/逗号 + 数值），支持直接从 Excel 复制：</p>
+        <textarea id="tableInput" rows="8" placeholder="Q1&#9;120&#10;Q2&#9;200&#10;Q3&#9;150&#10;Q4&#9;280"></textarea>
+        <div class="form-row">
+          <label>图表类型：</label>
+          <select id="tableChartType">
+            <option value="pie">饼图（Mermaid 原生）</option>
+            <option value="bar">柱状图（自定义 SVG）</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>图表标题：</label>
+          <input type="text" id="tableTitle" placeholder="数据统计">
+        </div>
+        <button class="primary-btn" id="btnGenerateFromTable">生成代码并加载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 导出模态框 ===== -->
+  <div class="modal" id="exportModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>⬇️ 导出图表</h3>
+        <button class="close-btn" id="closeExport">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-options">
+          <div class="form-row">
+            <label>宽度 (px)</label>
+            <input type="number" id="exportWidth" value="800" min="100">
+          </div>
+          <div class="form-row">
+            <label>高度 (px)</label>
+            <input type="number" id="exportHeight" value="600" min="100">
+          </div>
+          <div class="form-row">
+            <label>PNG 倍率</label>
+            <select id="exportScale">
+              <option value="1">1x（标清）</option>
+              <option value="2" selected>2x（高清）</option>
+              <option value="3">3x（超清）</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>PNG 背景</label>
+            <label class="checkbox-inline" title="勾选后 PNG 背景透明，不勾选则填充白色">
+              <input type="checkbox" id="exportTransparent" checked>
+              <span>透明背景</span>
+            </label>
+          </div>
+        </div>
+        <div class="export-buttons">
+          <button class="export-btn" id="btnExportSvg">
+            <span class="export-icon">📐</span>
+            <span>导出 SVG</span>
+            <small>矢量图，适合 Word 论文</small>
+          </button>
+          <button class="export-btn" id="btnExportPng">
+            <span class="export-icon">🖼️</span>
+            <span>导出 PNG</span>
+            <small>高清位图，适合 PPT 幻灯片</small>
+          </button>
+          <button class="export-btn" id="btnCopySvg">
+            <span class="export-icon">📋</span>
+            <span>复制 SVG</span>
+            <small>直接粘贴到 Word / PPT</small>
+          </button>
+          <button class="export-btn" id="btnExportMmd">
+            <span class="export-icon">📄</span>
+            <span>导出 .mmd</span>
+            <small>Mermaid 源码文件</small>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 帮助 / Mermaid 语法大全 ===== -->
+  <div class="modal" id="helpModal">
+    <div class="modal-content modal-help">
+      <div class="modal-header">
+        <h3>❓ Mermaid 语法大全</h3>
+        <button class="close-btn" id="closeHelp">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="help-intro">
+          <p>Mermaid 是一种用文本描述图表的语法，支持流程图、时序图、ER 图、甘特图、饼图、类图、思维导图等。</p>
+          <p>下面按图表类型列出常用语法速查。链接可在 config.json 的 helpDocs 中配置。</p>
+        </div>
+        <div class="help-grid" id="helpGrid">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 关注我（二维码 + 公众号复制） ===== -->
+  <div class="modal" id="followModal">
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h3>❤️ 关注我</h3>
+        <button class="close-btn" id="closeFollow">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="follow-qr-wrap">
+          <img class="follow-qr-img" id="followQrImg" src="" alt="公众号二维码" style="display:none;">
+          <div class="follow-qr-placeholder" id="followQrPlaceholder" style="display:none;">
+            请在 config.json 中配置 wechatQrUrl
+          </div>
+        </div>
+        <div class="follow-name-row">
+          <span class="follow-name-label">公众号：</span>
+          <span class="follow-name" id="followWechatName">未配置</span>
+          <button class="copy-btn" id="btnCopyWechat">📋 复制</button>
+        </div>
+        <p class="follow-tip">扫码关注，获取更多 Mermaid 图表技巧与模板</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 历史记录模态框 ===== -->
+  <div class="modal" id="historyModal">
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h3>🕐 最近绘图历史</h3>
+        <button class="close-btn" id="closeHistory">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 广告弹窗 ===== -->
+  <div class="modal ad-modal" id="adModal">
+    <div class="modal-content ad-content">
+      <div class="ad-header">
+        <span class="ad-cat">🐱</span>
+        <span class="ad-tears">🥺</span>
+      </div>
+      <p class="ad-text">阅读广告是网站维持的根本，微信扫描下方二维码阅读并点击文末的广告支持我们吧！当然,你也可以选择残忍关掉弹窗继续免费使用。</p>
+      <div class="ad-qr" id="adQr">
+        <img id="adQrImg" src="" alt="微信二维码">
+      </div>
+      <p class="ad-wechat" id="adWechatName"></p>
+      <button class="ad-btn" id="adCloseBtn" disabled>已知晓，继续使用 (5s)</button>
+    </div>
+  </div>
+
+  <!-- ===== 遮罩层 ===== -->
+  <div class="overlay" id="overlay"></div>
+
+  <!-- ===== Toast 提示 ===== -->
+  <div class="toast" id="toast"></div>
+
+  <!-- JS 按依赖顺序加载 -->
+  <script src="vendor/codemirror/codemirror.min.js"></script>
+  <script src="vendor/codemirror/simple.js"></script>
+  <script src="vendor/codemirror/matchbrackets.js"></script>
+  <script src="vendor/codemirror/show-hint.js"></script>
+  <script src="js/mermaid-mode.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/themes.js"></script>
+  <script src="js/templates.js"></script>
+  <script src="js/snippets.js"></script>
+  <script src="js/bar-chart.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/card-editor.js"></script>
+</body>
+</html>

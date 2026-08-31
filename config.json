@@ -1,0 +1,27 @@
+{
+  "siteTitle": "Mermaid 图表工坊",
+  "author": "图表工坊",
+  "avatarUrl": "",
+  "homeUrl": "https://jojocharm.top",
+  "wechatName": "",
+  "wechatQrUrl": "",
+  "moreToolsUrl": "https://jojocharm.top",
+  "uiTheme": "dark",
+  "helpDocs": [
+    { "type": "flowchart", "name": "流程图", "icon": "🔄", "code": "flowchart LR\nA[开始] --> B[结束]", "url": "" },
+    { "type": "sequence", "name": "时序图", "icon": "⏱", "code": "sequenceDiagram\nA->>B: 请求", "url": "" },
+    { "type": "er", "name": "ER 图", "icon": "🗄", "code": "erDiagram\nCUSTOMER ||--o{ ORDER : 下单", "url": "" },
+    { "type": "gantt", "name": "甘特图", "icon": "📅", "code": "gantt\nsection 阶段A\n任务1: 1, 3d", "url": "" },
+    { "type": "pie", "name": "饼图", "icon": "🥧", "code": "pie title 占比\n\"A\" : 30", "url": "" },
+    { "type": "class", "name": "类图", "icon": "📐", "code": "classDiagram\nAnimal <|-- Dog", "url": "" },
+    { "type": "mindmap", "name": "思维导图", "icon": "🧠", "code": "mindmap\nroot((主题))\n  分支A", "url": "" },
+    { "type": "git", "name": "Git 提交图", "icon": "🌿", "code": "gitGraph\ncommit\nbranch feature", "url": "" }
+  ],
+  "cdnBase": "https://cdn.jsdelivr.net/npm",
+  "mermaidVersion": "11.17.2",
+  "adPopup": {
+    "firstTrigger": 6,
+    "interval": 3,
+    "countdownSeconds": 5
+  }
+}

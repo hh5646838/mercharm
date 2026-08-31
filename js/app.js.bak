@@ -1,0 +1,841 @@
+/* ============================================================
+   app.js - 主应用逻辑
+   包含：编辑器、渲染调度、缩放平移、导出、本地持久化、
+        模板/片段/表格转图/历史记录、广告弹窗
+   ============================================================ */
+
+// ===== 全局状态 =====
+let currentCode = '';
+let currentScale = 1;
+let currentTranslateX = 0;
+let currentTranslateY = 0;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let currentTab = 'academic';   // 模板库当前标签
+let renderTimer = null;
+let adCountdownTimer = null;
+
+// localStorage 键名
+const LS_CODE = 'mermaid_tool_code';
+const LS_FAVORITES = 'mermaid_tool_favorites';
+const LS_HISTORY = 'mermaid_tool_history';
+const LS_THEME = 'mermaid_tool_theme';
+const LS_DOWNLOAD_COUNT = 'totalProcessedCount';
+
+// ============================================================
+// 工具函数
+// ============================================================
+
+/** Toast 轻提示 */
+function showToast(msg, duration = 2000) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove('show'), duration);
+}
+
+/** 关闭所有模态框与抽屉 */
+function closeAllModals() {
+  document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
+  document.getElementById('snippetsDrawer').classList.remove('active');
+  document.getElementById('overlay').classList.remove('active');
+}
+
+/** 打开指定模态框 */
+function openModal(id) {
+  document.getElementById(id).classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+}
+
+/** 下载文件 */
+function downloadFile(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// 代码编辑器
+// ============================================================
+
+function initEditor() {
+  const editor = document.getElementById('codeEditor');
+  const lineNumbers = document.getElementById('lineNumbers');
+
+  // 加载保存的代码，无则用默认示例
+  const saved = localStorage.getItem(LS_CODE);
+  if (saved) {
+    editor.value = saved;
+    currentCode = saved;
+  } else {
+    editor.value =
+`flowchart TD
+    A[开始使用] --> B[编写 Mermaid 代码]
+    B --> C[实时预览图表]
+    C --> D[切换学术/PPT主题]
+    D --> E[导出 SVG / 高清 PNG]
+    E --> F[用于论文 / PPT 汇报]
+    F --> G[完成 🎉]`;
+    currentCode = editor.value;
+  }
+
+  // 更新行号
+  function updateLineNumbers() {
+    const lines = editor.value.split('\n').length;
+    let html = '';
+    for (let i = 1; i <= lines; i++) html += i + '\n';
+    lineNumbers.textContent = html.trim();
+  }
+  updateLineNumbers();
+
+  // 同步滚动
+  editor.addEventListener('scroll', () => {
+    lineNumbers.scrollTop = editor.scrollTop;
+  });
+
+  // Tab 键插入两个空格
+  editor.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(end);
+      editor.selectionStart = editor.selectionEnd = start + 2;
+      updateLineNumbers();
+      scheduleRender();
+    }
+  });
+
+  // 输入事件：防抖渲染 + 保存
+  editor.addEventListener('input', () => {
+    currentCode = editor.value;
+    updateLineNumbers();
+    scheduleRender();
+    saveCode();
+  });
+
+  // 清空
+  document.getElementById('btnClear').addEventListener('click', () => {
+    if (confirm('确定要清空编辑器吗？')) {
+      editor.value = '';
+      currentCode = '';
+      updateLineNumbers();
+      scheduleRender();
+      saveCode();
+    }
+  });
+
+  // 格式化（去除多余空行和行尾空格）
+  document.getElementById('btnFormat').addEventListener('click', () => {
+    let code = editor.value;
+    code = code.replace(/\n{3,}/g, '\n\n');
+    code = code.replace(/[ \t]+$/gm, '');
+    editor.value = code.trim();
+    currentCode = editor.value;
+    updateLineNumbers();
+    scheduleRender();
+    saveCode();
+    showToast('已格式化');
+  });
+}
+
+/** 保存代码到 localStorage */
+function saveCode() {
+  localStorage.setItem(LS_CODE, currentCode);
+}
+
+// ============================================================
+// 图表渲染（Mermaid + 自定义柱状图）
+// ============================================================
+
+/** 防抖渲染 */
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderChart, 300);
+}
+
+/**
+ * 核心渲染函数
+ * 先检测是否为自定义柱状图，否则走 Mermaid
+ */
+
+/**
+ * 清除Mermaid渲染失败时直接输出到body底部的错误信息
+ * （带炸弹图标的大块文字，如 "Syntax error in text"）
+ */
+function clearMermaidErrorOutput() {
+  const knownIds = ['navbar', 'mainContainer', 'footer', 'templatesModal',
+    'snippetsDrawer', 'tableModal', 'exportModal', 'historyModal', 'adModal',
+    'overlay', 'toast'];
+  const knownClasses = ['navbar', 'main-container', 'footer', 'modal',
+    'drawer', 'overlay', 'toast'];
+
+  Array.from(document.body.children).forEach(el => {
+    if (el.tagName === 'HEADER' || el.tagName === 'MAIN' || el.tagName === 'FOOTER' || el.tagName === 'SCRIPT') return;
+    if (el.id && knownIds.includes(el.id)) return;
+    if (el.classList && knownClasses.some(c => el.classList.contains(c))) return;
+    // 移除body下未知的DIV直接子元素（Mermaid错误输出带炸弹图标）
+    if (el.tagName === 'DIV') {
+      el.remove();
+    }
+  });
+}
+
+/**
+ * 监听body子元素变化，自动移除Mermaid插入的错误信息
+ * （带炸弹图标的 "Syntax error in text" 大块文字）
+ * 无论Mermaid何时、以何种方式插入，都能立即捕获并移除
+ */
+function initMermaidErrorObserver() {
+  const knownIds = ['navbar', 'mainContainer', 'footer', 'templatesModal',
+    'snippetsDrawer', 'tableModal', 'exportModal', 'historyModal', 'adModal',
+    'overlay', 'toast'];
+  const knownClasses = ['navbar', 'main-container', 'footer', 'modal',
+    'drawer', 'overlay', 'toast'];
+
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'HEADER' || node.tagName === 'MAIN' ||
+            node.tagName === 'FOOTER' || node.tagName === 'SCRIPT') return;
+        if (node.id && knownIds.includes(node.id)) return;
+        if (node.classList && knownClasses.some(c => node.classList.contains(c))) return;
+        if (node.tagName === 'DIV') {
+          node.remove();
+        }
+      });
+    });
+  });
+
+  observer.observe(document.body, { childList: true });
+}
+
+function renderChart() {
+  const preview = document.getElementById('previewContent');
+  const code = currentCode.trim();
+
+  if (!code) {
+    preview.innerHTML = '<div class="empty-state">图表将在此处渲染</div>';
+    return;
+  }
+  // 清除Mermaid可能直接输出到body底部的错误信息（带炸弹图标的大块文字）
+  clearMermaidErrorOutput();
+
+  // 自定义柱状图
+  if (BarChart.isBarChart(code)) {
+    try {
+      const svg = BarChart.render(code, 800, 500);
+      preview.innerHTML = svg;
+    } catch (e) {
+      preview.innerHTML = `<div class="error-state"><h4>⚠️ 柱状图渲染错误</h4><pre>${e.message}</pre></div>`;
+    }
+    return;
+  }
+
+  // Mermaid 渲染
+  if (!window.mermaid) {
+    preview.innerHTML = '<div class="empty-state">Mermaid 库加载中...</div>';
+    return;
+  }
+
+  try {
+    const id = 'mermaid-svg-' + Date.now();
+    mermaid.render(id, code).then(({ svg }) => {
+      clearMermaidErrorOutput();
+      preview.innerHTML = svg;
+    }).catch(err => {
+      // 清除Mermaid直接输出到body的错误信息（同步+延迟，因为可能异步插入）
+      clearMermaidErrorOutput();
+      setTimeout(clearMermaidErrorOutput, 50);
+      setTimeout(clearMermaidErrorOutput, 200);
+      preview.innerHTML = `
+        <div class="error-state">
+          <h4>⚠️ Mermaid 语法错误</h4>
+          <p>请检查代码，常见问题：</p>
+          <ul>
+            <li>节点名称含特殊字符未加引号</li>
+            <li>箭头语法错误（应为 --&gt; 或 ---）</li>
+            <li>图表类型拼写错误</li>
+            <li>缩进 / 括号不匹配</li>
+          </ul>
+          <pre>${(err.message || String(err)).replace(/</g, '&lt;')}</pre>
+        </div>`;
+    });
+  } catch (e) {
+    preview.innerHTML = `<div class="error-state"><h4>渲染异常</h4><pre>${e.message}</pre></div>`;
+  }
+}
+
+// 暴露给 themes.js 调用
+window.renderChart = renderChart;
+
+// ============================================================
+// 预览画布：缩放 + 拖拽平移
+// ============================================================
+
+function initPreviewControls() {
+  const canvas = document.getElementById('previewCanvas');
+  const content = document.getElementById('previewContent');
+
+  function updateTransform() {
+    content.style.transform =
+      `translate(${currentTranslateX}px, ${currentTranslateY}px) scale(${currentScale})`;
+    document.getElementById('zoomLevel').textContent = Math.round(currentScale * 100) + '%';
+  }
+
+  // 鼠标滚轮缩放
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    currentScale = Math.max(0.2, Math.min(5, currentScale + delta));
+    updateTransform();
+  }, { passive: false });
+
+  // 按钮缩放
+  document.getElementById('btnZoomIn').addEventListener('click', () => {
+    currentScale = Math.min(5, currentScale + 0.2);
+    updateTransform();
+  });
+  document.getElementById('btnZoomOut').addEventListener('click', () => {
+    currentScale = Math.max(0.2, currentScale - 0.2);
+    updateTransform();
+  });
+  document.getElementById('btnZoomReset').addEventListener('click', () => {
+    currentScale = 1;
+    currentTranslateX = 0;
+    currentTranslateY = 0;
+    updateTransform();
+  });
+
+  // 适应窗口
+  document.getElementById('btnFit').addEventListener('click', () => {
+    const svg = content.querySelector('svg');
+    if (!svg) return;
+    const rect = canvas.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const svgW = vb.width || svg.width.baseVal.value || 800;
+    const svgH = vb.height || svg.height.baseVal.value || 600;
+    const scaleX = (rect.width - 60) / svgW;
+    const scaleY = (rect.height - 60) / svgH;
+    currentScale = Math.min(scaleX, scaleY, 3);
+    currentTranslateX = 0;
+    currentTranslateY = 0;
+    updateTransform();
+  });
+
+  // 拖拽平移
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button')) return;
+    isDragging = true;
+    dragStartX = e.clientX - currentTranslateX;
+    dragStartY = e.clientY - currentTranslateY;
+    canvas.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    currentTranslateX = e.clientX - dragStartX;
+    currentTranslateY = e.clientY - dragStartY;
+    updateTransform();
+  });
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+    canvas.style.cursor = 'grab';
+  });
+
+  updateTransform();
+}
+
+// ============================================================
+// 模板库
+// ============================================================
+
+function initTemplates() {
+  document.getElementById('btnTemplates').addEventListener('click', () => {
+    openModal('templatesModal');
+    renderTemplates(currentTab);
+  });
+  document.getElementById('closeTemplates').addEventListener('click', closeAllModals);
+
+  document.querySelectorAll('#templatesModal .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#templatesModal .tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentTab = btn.dataset.tab;
+      renderTemplates(currentTab);
+    });
+  });
+}
+
+/** 渲染模板网格（全局函数，供 templates.js 内部调用） */
+function renderTemplates(tab) {
+  const favorites = getFavorites();
+  Templates.render(tab, document.getElementById('templateGrid'), favorites);
+}
+
+/** 加载模板代码到编辑器 */
+function loadTemplate(code) {
+  const editor = document.getElementById('codeEditor');
+  editor.value = code;
+  currentCode = code;
+  // 更新行号
+  const lines = code.split('\n').length;
+  let ln = '';
+  for (let i = 1; i <= lines; i++) ln += i + '\n';
+  document.getElementById('lineNumbers').textContent = ln.trim();
+  scheduleRender();
+  saveCode();
+  addToHistory(code);
+}
+
+// ============================================================
+// 模板收藏
+// ============================================================
+
+function getFavorites() {
+  try { return JSON.parse(localStorage.getItem(LS_FAVORITES) || '[]'); }
+  catch { return []; }
+}
+
+function toggleFavorite(tpl) {
+  let favorites = getFavorites();
+  const idx = favorites.findIndex(f => f.id === tpl.id);
+  if (idx >= 0) {
+    favorites.splice(idx, 1);
+    showToast('已取消收藏');
+  } else {
+    favorites.push(tpl);
+    showToast('已收藏到「我的收藏」');
+  }
+  localStorage.setItem(LS_FAVORITES, JSON.stringify(favorites));
+}
+
+// ============================================================
+// 历史记录（最近 5 条）
+// ============================================================
+
+function addToHistory(code) {
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); } catch {}
+  const item = {
+    code,
+    time: new Date().toLocaleString('zh-CN', { hour12: false }),
+    preview: code.substring(0, 60).replace(/\n/g, ' ')
+  };
+  history.unshift(item);
+  history = history.slice(0, 5);
+  localStorage.setItem(LS_HISTORY, JSON.stringify(history));
+}
+
+function initHistory() {
+  document.getElementById('btnHistory').addEventListener('click', () => {
+    renderHistory();
+    openModal('historyModal');
+  });
+  document.getElementById('closeHistory').addEventListener('click', closeAllModals);
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); } catch {}
+
+  if (history.length === 0) {
+    list.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:40px 0;">暂无历史记录</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  history.forEach((item, idx) => {
+    const el = document.createElement('div');
+    el.className = 'history-item';
+    el.innerHTML = `
+      <div class="history-info">
+        <div class="history-time">${item.time}</div>
+        <div class="history-preview">${item.preview}...</div>
+      </div>
+      <div class="history-actions">
+        <button class="icon-btn" title="加载">📂</button>
+        <button class="icon-btn" title="删除">🗑️</button>
+      </div>`;
+    // 加载
+    el.querySelector('.history-actions button:first-child').addEventListener('click', () => {
+      loadTemplate(item.code);
+      closeAllModals();
+      showToast('历史记录已加载');
+    });
+    // 删除
+    el.querySelector('.history-actions button:last-child').addEventListener('click', () => {
+      let h = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
+      h.splice(idx, 1);
+      localStorage.setItem(LS_HISTORY, JSON.stringify(h));
+      renderHistory();
+    });
+    list.appendChild(el);
+  });
+}
+
+// ============================================================
+// 语法片段抽屉
+// ============================================================
+
+function initSnippets() {
+  document.getElementById('btnSnippets').addEventListener('click', () => {
+    const drawer = document.getElementById('snippetsDrawer');
+    const overlay = document.getElementById('overlay');
+    drawer.classList.toggle('active');
+    overlay.classList.toggle('active');
+  });
+  document.getElementById('closeSnippets').addEventListener('click', () => {
+    document.getElementById('snippetsDrawer').classList.remove('active');
+    document.getElementById('overlay').classList.remove('active');
+  });
+  Snippets.render(document.getElementById('snippetsList'));
+}
+
+// ============================================================
+// 表格数据转图表
+// ============================================================
+
+function initTableToChart() {
+  document.getElementById('btnTableToChart').addEventListener('click', () => openModal('tableModal'));
+  document.getElementById('closeTable').addEventListener('click', closeAllModals);
+
+  document.getElementById('btnGenerateFromTable').addEventListener('click', () => {
+    const input = document.getElementById('tableInput').value.trim();
+    const type = document.getElementById('tableChartType').value;
+    const title = document.getElementById('tableTitle').value.trim() || '数据统计';
+
+    if (!input) { showToast('请输入数据'); return; }
+
+    // 解析：支持 Tab / 逗号 / 中文逗号分隔
+    const lines = input.split('\n').filter(l => l.trim());
+    const data = [];
+    for (const line of lines) {
+      const parts = line.split(/[\t,，]/).map(p => p.trim());
+      if (parts.length >= 2) {
+        const val = parseFloat(parts[parts.length - 1]);
+        if (!isNaN(val)) {
+          data.push({ label: parts.slice(0, -1).join(' '), value: val });
+        }
+      }
+    }
+
+    if (data.length === 0) { showToast('未解析到有效数据'); return; }
+
+    // 生成代码
+    let code = '';
+    if (type === 'pie') {
+      code = `pie title ${title}\n`;
+      data.forEach(d => { code += `    "${d.label}" : ${d.value}\n`; });
+    } else {
+      code = `%% @chart bar\ntitle: ${title}\nx-label: 类别\ny-label: 数值\ndata:\n`;
+      data.forEach(d => { code += `${d.label}: ${d.value}\n`; });
+    }
+
+    loadTemplate(code);
+    closeAllModals();
+    showToast(`已生成 ${type === 'pie' ? '饼图' : '柱状图'} 代码`);
+  });
+}
+
+// ============================================================
+// 导出功能
+// ============================================================
+
+function initExport() {
+  document.getElementById('btnExport').addEventListener('click', () => openModal('exportModal'));
+  document.getElementById('closeExport').addEventListener('click', closeAllModals);
+
+  document.getElementById('btnExportSvg').addEventListener('click', exportSVG);
+  document.getElementById('btnExportPng').addEventListener('click', exportPNG);
+  document.getElementById('btnCopySvg').addEventListener('click', copySVG);
+  document.getElementById('btnExportMmd').addEventListener('click', exportMMD);
+}
+
+/** 获取当前预览区的 SVG 源码 */
+function getCurrentSVG() {
+  const content = document.getElementById('previewContent');
+  const svg = content.querySelector('svg');
+  return svg ? svg.outerHTML : null;
+}
+
+/** 导出 SVG 矢量图 */
+function exportSVG() {
+  const svg = getCurrentSVG();
+  if (!svg) { showToast('没有可导出的图表'); return; }
+  const width = document.getElementById('exportWidth').value || 800;
+  const height = document.getElementById('exportHeight').value || 600;
+  // 确保 SVG 有 xmlns 和尺寸
+  let svgCode = svg;
+  if (!svgCode.includes('xmlns=')) {
+    svgCode = svgCode.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+  }
+  // 覆盖 width/height
+  svgCode = svgCode.replace(/width="[^"]*"/, `width="${width}"`);
+  svgCode = svgCode.replace(/height="[^"]*"/, `height="${height}"`);
+  if (!svgCode.includes('width=')) {
+    svgCode = svgCode.replace('<svg ', `<svg width="${height}" `);
+  }
+  downloadFile(svgCode, 'chart.svg', 'image/svg+xml');
+  incrementDownloadCount();
+  showToast('SVG 已导出');
+}
+
+/** 导出高清 PNG */
+function exportPNG() {
+  const svg = getCurrentSVG();
+  if (!svg) { showToast('没有可导出的图表'); return; }
+  const width = parseInt(document.getElementById('exportWidth').value) || 800;
+  const height = parseInt(document.getElementById('exportHeight').value) || 600;
+  const scale = parseInt(document.getElementById('exportScale').value) || 2;
+
+  // 确保 SVG 有 xmlns
+  let svgCode = svg;
+  if (!svgCode.includes('xmlns=')) {
+    svgCode = svgCode.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+  }
+
+  const svgBlob = new Blob([svgCode], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) { showToast('PNG 导出失败'); return; }
+      const pngUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = pngUrl;
+      a.download = `chart_${scale}x.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(pngUrl);
+    }, 'image/png');
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => {
+    showToast('PNG 导出失败，请检查图表');
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+  incrementDownloadCount();
+  showToast('PNG 导出中...');
+}
+
+/** 复制 SVG 到剪贴板（可直接粘贴 Word/PPT） */
+async function copySVG() {
+  const svg = getCurrentSVG();
+  if (!svg) { showToast('没有可复制的图表'); return; }
+
+  try {
+    // 以 HTML 格式写入，Word/PPT 可识别为图片
+    const htmlBlob = new Blob([`<div>${svg}</div>`], { type: 'text/html' });
+    const textBlob = new Blob([svg], { type: 'text/plain' });
+    await navigator.clipboard.write([
+      new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob })
+    ]);
+    showToast('SVG 已复制，可直接粘贴到 Word / PPT');
+  } catch (e) {
+    // 降级：复制纯文本
+    try {
+      await navigator.clipboard.writeText(svg);
+      showToast('SVG 源码已复制（纯文本）');
+    } catch {
+      showToast('复制失败，请手动复制');
+    }
+  }
+}
+
+/** 导出 .mmd 源码文件 */
+function exportMMD() {
+  if (!currentCode.trim()) { showToast('没有可导出的代码'); return; }
+  downloadFile(currentCode, 'diagram.mmd', 'text/plain');
+  incrementDownloadCount();
+  showToast('源码已导出');
+}
+
+// ============================================================
+// 下载计数与广告弹窗
+// ============================================================
+
+/** 增加下载计数并检查是否触发广告 */
+function incrementDownloadCount() {
+  let count = parseInt(localStorage.getItem(LS_DOWNLOAD_COUNT) || '0');
+  count++;
+  localStorage.setItem(LS_DOWNLOAD_COUNT, count.toString());
+  checkAdTrigger(count);
+}
+
+/**
+ * 检查是否触发广告弹窗
+ * 首次超过 firstTrigger 次触发，之后每 interval 次触发一次
+ */
+function checkAdTrigger(count) {
+  const cfg = AppConfig.get('adPopup') || { firstTrigger: 6, interval: 3 };
+  const firstTrigger = cfg.firstTrigger || 6;
+  const interval = cfg.interval || 3;
+
+  if (count === firstTrigger) { showAdPopup(); return; }
+  if (count > firstTrigger && (count - firstTrigger) % interval === 0) {
+    showAdPopup();
+  }
+}
+
+/** 显示广告弹窗（带倒计时按钮） */
+function showAdPopup() {
+  const modal = document.getElementById('adModal');
+  const btn = document.getElementById('adCloseBtn');
+  const cfg = AppConfig.get('adPopup') || { countdownSeconds: 5 };
+  const seconds = cfg.countdownSeconds || 5;
+
+  modal.classList.add('active');
+  document.getElementById('overlay').classList.add('active');
+
+  btn.disabled = true;
+  let remaining = seconds;
+  btn.textContent = `已知晓，继续使用 (${remaining}s)`;
+
+  if (adCountdownTimer) clearInterval(adCountdownTimer);
+  adCountdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(adCountdownTimer);
+      btn.disabled = false;
+      btn.textContent = '已知晓，继续使用';
+    } else {
+      btn.textContent = `已知晓，继续使用 (${remaining}s)`;
+    }
+  }, 1000);
+}
+
+function initAdPopup() {
+  document.getElementById('adCloseBtn').addEventListener('click', () => {
+    if (document.getElementById('adCloseBtn').disabled) return;
+    document.getElementById('adModal').classList.remove('active');
+    document.getElementById('overlay').classList.remove('active');
+  });
+}
+
+// ============================================================
+// 遮罩 / ESC / 主题持久化
+// ============================================================
+
+function initOverlay() {
+  document.getElementById('overlay').addEventListener('click', () => {
+    // 广告弹窗不允许点击遮罩关闭
+    if (document.getElementById('adModal').classList.contains('active')) return;
+    closeAllModals();
+  });
+}
+
+/** 保存主题到 localStorage */
+function saveTheme(themeKey) {
+  localStorage.setItem(LS_THEME, themeKey);
+}
+
+// ============================================================
+// 加载 Mermaid 库（CDN，可在 config.json 配置地址）
+// ============================================================
+
+function loadMermaid() {
+  const cfg = AppConfig.get();
+  const cdnBase = cfg.cdnBase || 'https://cdn.jsdelivr.net/npm';
+  const version = cfg.mermaidVersion || '10.9.1';
+  const script = document.createElement('script');
+  script.src = `${cdnBase}/mermaid@${version}/dist/mermaid.min.js`;
+
+  script.onload = () => {
+    const mc = ThemeManager.getCurrentMermaidConfig();
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: mc.theme,
+      themeVariables: mc.themeVariables,
+      securityLevel: 'loose',
+      flowchart: { htmlLabels: true, curve: 'basis' }
+    });
+    renderChart();
+  };
+
+  script.onerror = () => {
+    document.getElementById('previewContent').innerHTML =
+      '<div class="error-state"><h4>Mermaid 库加载失败</h4>' +
+      '<p>请检查网络连接，或在 config.json 中配置可用的 CDN 地址（cdnBase 字段）。</p></div>';
+  };
+
+  document.head.appendChild(script);
+}
+
+// ============================================================
+// 应用初始化
+// ============================================================
+
+async function init() {
+  // 1. 加载配置
+  await AppConfig.load();
+
+  // 2. 初始化主题
+  ThemeManager.init();
+
+  // 恢复保存的主题
+  const savedTheme = localStorage.getItem(LS_THEME);
+  if (savedTheme && ThemeManager.themes[savedTheme]) {
+    const group = ThemeManager.themes[savedTheme].group;
+    document.querySelectorAll('.theme-group-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.group === group);
+    });
+    ThemeManager.currentGroup = group;
+    ThemeManager.renderOptionsForGroup(group);
+    document.getElementById('themeSelect').value = savedTheme;
+    ThemeManager.apply(savedTheme);
+  }
+
+  // 包装 ThemeManager.apply 以持久化主题
+  const origApply = ThemeManager.apply.bind(ThemeManager);
+  ThemeManager.apply = function (key) {
+    origApply(key);
+    saveTheme(key);
+  };
+
+  // 2.5 监听并自动移除Mermaid插入的错误信息（带炸弹图标的大块文字）
+  initMermaidErrorObserver();
+
+  // 3. 加载 Mermaid
+  loadMermaid();
+
+  // 4. 初始化各模块
+  initEditor();
+  initPreviewControls();
+  initTemplates();
+  initSnippets();
+  initTableToChart();
+  initExport();
+  initHistory();
+  initAdPopup();
+  initOverlay();
+
+  // 5. ESC 关闭弹窗（广告弹窗除外）
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (document.getElementById('adModal').classList.contains('active')) return;
+      closeAllModals();
+    }
+  });
+}
+
+// DOM 就绪后启动
+document.addEventListener('DOMContentLoaded', init);
